@@ -1,6 +1,9 @@
 all: main encrypt
 
-main: main.c aes256.c utils.c
+main: main.c aes256.c utils.c charset.c
+	gcc $^ -o $@ -lcrypto
+
+brute: brute_seq.c aes256.c utils.c charset.c
 	gcc $^ -o $@ -lcrypto
 
 encrypt: encrypt.c aes256.c utils.c
@@ -10,4 +13,4 @@ mainMPI: mainMPI.c aes256.c utils.c
 	mpicc $^ -o $@ -lcrypto
 
 clean:
-	@rm main encrypt
+	@rm main encrypt brute
