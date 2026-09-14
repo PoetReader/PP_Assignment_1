@@ -124,6 +124,5 @@ int main(int argc, char *argv[])
   free(ciphertext); // free mem
   free(plaintext);  // free mem
   free(password); //free mem
-
   return 1;
 }
