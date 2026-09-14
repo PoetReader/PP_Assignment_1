@@ -1,7 +1,10 @@
+#define _POSIX_C_SOURCE 199309L
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "aes256.h"
 #include "utils.h"
@@ -13,11 +16,11 @@ int main(int argc, char *argv[])
   // Check if correct number of arguments have been passed
   if (argc != 4)
   {
-    printf("Missing something!\n%s <max_password_length> <.enc_file_path> <.sha512_file_path>\n", argv[0]);
+    printf("Missing something!\n%s <password_length> <.enc_file_path> <.sha512_file_path>\n", argv[0]);
     return 1;
   }
   // Parse given variables
-  int max_length = atoi(argv[1]);
+  int password_length = atoi(argv[1]);
   const char *enc_path = argv[2];
   const char *sha_path = argv[3];
   // alloc buffer
@@ -32,7 +35,7 @@ int main(int argc, char *argv[])
   if (ciphertext_length <= 0)
   {
     printf("Failed to load .enc file\n");
-    return 2;
+    return 1;
   }
 
   uint32_t sha_length = file_load(sha_path, plaintext_checksum);
@@ -40,7 +43,8 @@ int main(int argc, char *argv[])
   if (sha_length != SHA512_DIGEST_LENGTH)
   {
     printf("Failed to load .sha file\n");
-    return 3;
+    return 1;
+  
   }
 
   // testing it with single password
@@ -64,50 +68,62 @@ int main(int argc, char *argv[])
   }
   */
 
-  // considering passwords with length 1 to max_length
-  for (int length = 1; length <= max_length; length++)
+  printf("Looking for password with length: %d\n", password_length);
+  char *password = malloc(password_length + 1); // declare password to be searched for
+
+  int64_t total = 1; // declare variable to get total amount of possible passwords
+  for (int i = 0; i < password_length; i++)
   {
-    printf("Looking for password with length: %d\n", length);
-    char password[32] = {0}; // declare password to be searched for
+    total *= CHARSET_SIZE;
+  }
 
-    int64_t total = 1; // declare variable to get total amount of possible passwords
-    for (int i = 0; i < length; i++)
+  // start measuring the time
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  // bruteforce the password now.
+  for (int64_t counter = 0; counter < total; counter++)
+  {
+    // variable n used to convert the counter to the password according to the CHARSET
+    int64_t n = counter;
+    // start with the most right position of the password
+    for (int pos = password_length - 1; pos >= 0; pos--)
     {
-      total *= CHARSET_SIZE;
+      // using the base to CHARSET_SIZE (which is 62)
+      // convert n to the password char by char
+      password[pos] = CHARSET[n % CHARSET_SIZE];
+      n /= CHARSET_SIZE;
     }
+    password[password_length] = '\0'; // add the null terminator
 
-    // bruteforce the password now.
-    for (int64_t counter = 0; counter < total; counter++)
+    // test password
+    pbkdf2(password, password_length, key);                                            // key generation of current password
+    int32_t plaintext_length = decrypt(ciphertext, ciphertext_length, key, plaintext); // decryption with generated key
+    if (plaintext_length >= 0)                                                         // check if decription has worked
     {
-      // variable n used to convert the counter to the password according to the CHARSET
-      int64_t n = counter;
-      // start with the most right position of the password
-      for (int pos = length - 1; pos >= 0; pos--)
-      {
-        // using the base to CHARSET_SIZE (which is 62)
-        // convert n to the password char by char
-        password[pos] = CHARSET[n % CHARSET_SIZE];
-        n /= CHARSET_SIZE;
+      sha512sum(plaintext, plaintext_length, computed_checksum); // Compute decrypted data sha512 sum
+      if (!sha512cmp(plaintext_checksum, computed_checksum))
+      {                                                        // If sha512 match with the original file we succeeded
+        plaintext[plaintext_length] = '\0';                    // Make plaintext data "printable"
+        printf("Encrypted file contains: %s\n", plaintext);    // Print decrypted data
+        printf("The password to the file is: %s\n", password); // Print the password
+        clock_gettime(CLOCK_MONOTONIC, &end);                  // finish measuring the time
+        double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        printf("Time: %.3f seconds\n", elapsed);
+        free(ciphertext); // free mem
+        free(plaintext);  // free mem
+        free(password); //free mem
+        return 0;
       }
-      password[length] = '\0'; // add the null terminator
-
-      // test password
-      pbkdf2(password, length, key); // key generation of current password
-      int32_t plaintext_length = decrypt(ciphertext, ciphertext_length, key, plaintext); // decryption with generated key
-      if (plaintext_length >= 0) // check if decription has worked
-      {
-        sha512sum(plaintext, plaintext_length, computed_checksum); // Compute decrypted data sha512 sum
-        if (!sha512cmp(plaintext_checksum, computed_checksum))
-        {                                                     // If sha512 match with the original file we succeeded
-          plaintext[plaintext_length] = '\0';                 // Make plaintext data "printable"
-          printf("Encrypted file contains: %s\n", plaintext); // Print decrypted data
-          printf("The password to the file is: %s\n", password);// Print the password 
-          return 0;
-        }
-      }
-      
     }
   }
-  printf("Password not found with given length: %d\n", max_length);
-  return 1; 
+
+  printf("Password not found with given length: %d\n", password_length);
+  clock_gettime(CLOCK_MONOTONIC, &end); // finish measuring the time
+  double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+  printf("Time: %.3f seconds\n", elapsed);
+  free(ciphertext); // free mem
+  free(plaintext);  // free mem
+  free(password); //free mem
+
+  return 1;
 }
