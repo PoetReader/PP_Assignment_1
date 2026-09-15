@@ -11,6 +11,19 @@
 #include "utils.h"
 #include "charset.h"
 
+int checkMsg()
+{
+  int flag = 0;
+  MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+  if (flag)
+  {
+    // receive the msg and remove it
+    int msg = 0;
+    MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  }
+  return flag;
+}
+
 int main(int argc, char *argv[])
 {
 
@@ -93,20 +106,38 @@ int main(int argc, char *argv[])
   // flag to check if msg is to be send to the other ranks
   int found = 0;
 
+  // optimization: add reset_countdown and countdown variable for periodic MPI_Iprobe call
+  int64_t reset_countdown = total / (size * 1000);
+  if (reset_countdown < 1)
+  {
+    reset_countdown = 1;
+  } // if the total number of
+  int64_t countdown = reset_countdown;
+  // flag for checking across ranks if password was found
+  int flag = 0;
+
+  // opt. turing the password into integer
+  uint8_t password_index[password_length];
+
+  int64_t n = start;
+  // variable n used to find the starting password as an integer array of a ranks range
+  // steup once per rank
+  for (int pos = password_length - 1; pos >= 0; pos--)
+  {
+    password_index[pos] = n % CHARSET_SIZE;
+    n /= CHARSET_SIZE;
+  }
+
   // bruteforce the password now.
   for (int64_t counter = start; counter < end; counter++)
   {
-    // variable n used to convert the counter to the password according to the CHARSET
-    int64_t n = counter;
-    // start with the most right position of the password
-    for (int pos = password_length - 1; pos >= 0; pos--)
+
+    // build string from password to test
+    for (int pos = 0; pos < password_length; pos++)
     {
-      // using the base to CHARSET_SIZE (which is 62)
-      // convert n to the password char by char
-      password[pos] = CHARSET[n % CHARSET_SIZE];
-      n /= CHARSET_SIZE;
+      password[pos] = CHARSET[password_index[pos]];
+      password[password_length] = '\0';
     }
-    password[password_length] = '\0'; // add the null terminator
 
     // test password
     pbkdf2(password, password_length, key);                                            // key generation of current password
@@ -135,18 +166,33 @@ int main(int argc, char *argv[])
       }
     }
     // check if password has been found by another rank
-    int flag = 0;
-    MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
-    if (flag)
+    // opt: to improve the usage of resources MPI_Iprobe called periodically
+    if (--countdown == 0)
     {
-      // receive the msg and remove it
-      int msg = 0;
-      MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      break;
+      countdown = reset_countdown;
+      flag = checkMsg();
+      if (flag)
+      {
+        break;
+      }
+    }
+
+    // decrement to the next password like an odometer
+    for (int pos = password_length - 1; pos >= 0; pos--)
+    {
+      // increment to the next password starting from most right number
+      if (++password_index[pos] < CHARSET_SIZE)
+      {
+        break;
+      }
+      // if position has reached 61 in Charset, the current position will be reset to 0
+      password_index[pos] = 0;
     }
   }
   if (!found)
   {
+    // check for msgs before calling MPI_Finalize()
+    checkMsg();
     printf("Rank %d: Password not found with given length %d or in this rank.\n", rank, password_length);
   }
   clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
