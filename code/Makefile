@@ -9,7 +9,7 @@ brute: brute_seq.c aes256.c utils.c charset.c
 encrypt: encrypt.c aes256.c utils.c
 	gcc $^ -o $@ -lcrypto
 
-mainMPI: mainMPI.c aes256.c utils.c
+mainMPI: mainMPI.c aes256.c utils.c charset.c
 	mpicc $^ -o $@ -lcrypto
 
 clean:
