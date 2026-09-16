@@ -11,22 +11,18 @@
 #include "utils.h"
 #include "charset.h"
 
-int checkMsg()
-{
-  int flag = 0;
-  MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
-  if (flag)
-  {
-    // receive the msg and remove it
-    int msg = 0;
-    MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  }
-  return flag;
-}
+
 
 int main(int argc, char *argv[])
 {
 
+
+  
+  //  start measuring the time
+  struct timespec start_timer, end_timer;
+  clock_gettime(CLOCK_MONOTONIC, &start_timer);
+
+  
   MPI_Init(&argc, &argv);
   int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Why MPICOMM WORLD
@@ -47,11 +43,7 @@ int main(int argc, char *argv[])
   const char *enc_path = argv[2];
   const char *sha_path = argv[3];
 
-  // test so only rank 0 prints out, so only once
-  if (rank == 0)
-  {
-    printf("Looking for password with length = %d\n", password_length);
-  }
+
 
   // all ranks load buffer
   uint8_t key[AES_256_KEY_LENGTH];                  // Stores the generate AES key
@@ -61,19 +53,31 @@ int main(int argc, char *argv[])
   uint8_t computed_checksum[SHA512_DIGEST_LENGTH];  // Stores the decrypted file sha512 sum
 
   // load files from argv
-  uint32_t ciphertext_length = file_load(enc_path, ciphertext);
-  if (ciphertext_length <= 0)
+
+  uint32_t ciphertext_length = 0;
+  uint32_t sha_length = 0;
+
+if (rank == 0) {
+    ciphertext_length = file_load(enc_path, ciphertext);
+    if (ciphertext_length <= 0)
   {
     printf("Failed to load .enc file\n");
+    MPI_Finalize();
     return 0;
   }
-
-  uint32_t sha_length = file_load(sha_path, plaintext_checksum);
-  if (sha_length != SHA512_DIGEST_LENGTH)
+    sha_length = file_load(sha_path, plaintext_checksum);
+    if (sha_length != SHA512_DIGEST_LENGTH)
   {
     printf("Failed to load .sha file\n");
-    return 1;
+    MPI_Finalize();
+    return 0;
   }
+}
+
+MPI_Bcast(&ciphertext_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+MPI_Bcast(&sha_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+MPI_Bcast(ciphertext, ciphertext_length, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+MPI_Bcast(plaintext_checksum, SHA512_DIGEST_LENGTH, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
   //-----------------
   char *password = malloc(password_length + 1); // declare password to be searched for
@@ -96,19 +100,15 @@ int main(int argc, char *argv[])
   {
     end = start + chunk;
   }
-  printf("Rank: %d range start: %ld, and end: %ld\n", rank, start, end);
+  //printf("Rank: %d range start: %ld, and end: %ld\n", rank, start, end);
 
-  // each chunk brute forces its own range now
-  //  start measuring the time
-  struct timespec start_timer, end_timer;
-  clock_gettime(CLOCK_MONOTONIC, &start_timer);
-
+ 
   // flag to check if msg is to be send to the other ranks
   int found = 0;
 
   // optimization: add reset_countdown and countdown variable for periodic MPI_Iprobe call
-  int64_t reset_countdown = total / (size * 1000);
-  if (reset_countdown < 1)
+  int64_t reset_countdown = 100;
+  if (total < 100)
   {
     reset_countdown = 1;
   } // if the total number of
@@ -128,26 +128,40 @@ int main(int argc, char *argv[])
     n /= CHARSET_SIZE;
   }
 
+
+
+  
   // bruteforce the password now.
   for (int64_t counter = start; counter < end; counter++)
   {
-
+   
     // build string from password to test
     for (int pos = 0; pos < password_length; pos++)
     {
       password[pos] = CHARSET[password_index[pos]];
-      password[password_length] = '\0';
     }
+    password[password_length] = '\0';
+
+     // each chunk brute forces its own range now
+
 
     // test password
-    pbkdf2(password, password_length, key);                                            // key generation of current password
+    pbkdf2(password, password_length, key); 
+    
+
+
+
+    // key generation of current password
     int32_t plaintext_length = decrypt(ciphertext, ciphertext_length, key, plaintext); // decryption with generated key
+
+  
     if (plaintext_length >= 0)                                                         // check if decription has worked
     {
       sha512sum(plaintext, plaintext_length, computed_checksum); // Compute decrypted data sha512 sum
       if (!sha512cmp(plaintext_checksum, computed_checksum))
       {                                                                       // If sha512 match with the original file we succeeded
         plaintext[plaintext_length] = '\0';                                   // Make plaintext data "printable"
+        
         printf("Encrypted file contains: %s\n", plaintext);                   // Print decrypted data
         printf("Rank %d: The password to the file is: %s\n", rank, password); // Print the password
 
@@ -164,13 +178,24 @@ int main(int argc, char *argv[])
         }
         break;
       }
+ 
+        
     }
     // check if password has been found by another rank
     // opt: to improve the usage of resources MPI_Iprobe called periodically
-    if (--countdown == 0)
+    
+    countdown--;
+    if (countdown == 0)
     {
       countdown = reset_countdown;
-      flag = checkMsg();
+      int flag = 0;
+  MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+  if (flag)
+  {
+    // receive the msg and remove it
+    int msg = 0;
+    MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  }
       if (flag)
       {
         break;
@@ -181,27 +206,40 @@ int main(int argc, char *argv[])
     for (int pos = password_length - 1; pos >= 0; pos--)
     {
       // increment to the next password starting from most right number
-      if (++password_index[pos] < CHARSET_SIZE)
+      password_index[pos]++;
+      if (password_index[pos] < CHARSET_SIZE)
       {
         break;
       }
       // if position has reached 61 in Charset, the current position will be reset to 0
       password_index[pos] = 0;
     }
+
   }
   if (!found)
   {
     // check for msgs before calling MPI_Finalize()
-    checkMsg();
-    printf("Rank %d: Password not found with given length %d or in this rank.\n", rank, password_length);
+    int flag = 0;
+  MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+  if (flag)
+  {
+    // receive the msg and remove it
+    int msg = 0;
+    MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   }
-  clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
-  double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
-  printf("Rank: %d Time: %.3f seconds\n", rank, elapsed);
+  }
+                 //stop timer
+
+
   free(ciphertext); // free mem
   free(plaintext);  // free mem
   free(password);   // free mem
 
   MPI_Finalize();
+      clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
+  double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
+  printf("Testing timing of beginning ---- Rank: %d Time: %.9f seconds\n", rank, elapsed);
+
+
   return 0;
 }

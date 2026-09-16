@@ -31,3 +31,4 @@ Create a hostfile:
 - Put the nodes you need in `hostfile`, in the same format as the one print by the previous script
 - Compile your mpi version: `make mainMPI`
 - Use the `mpirun` command to run the code on the cluster using the hostfile. You must ensure a fair distribution of the processes across the nodes. You can check it by listing the processes running on the nodes.
+        

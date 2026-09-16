@@ -12,9 +12,9 @@ encrypt: encrypt.c aes256.c utils.c
 mainMPI: mainMPI.c aes256.c utils.c charset.c
 	mpicc $^ -o $@ -lcrypto
 
-optMPI: mainMPI_opt.c aes256.c utils.c charset.c
+optMPI: optMPI.c aes256.c utils.c charset.c
 	mpicc $^ -o $@ -lcrypto
 
 
 clean:
-	@rm main encrypt brute
+	@rm main encrypt brute mainMPI optMPI

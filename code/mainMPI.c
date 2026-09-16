@@ -13,6 +13,10 @@
 
 int main(int argc, char *argv[])
 {
+  // each chunk brute forces its own range now
+  //  start measuring the time
+  struct timespec start_timer, end_timer;
+  clock_gettime(CLOCK_MONOTONIC, &start_timer);
 
   MPI_Init(&argc, &argv);
   int rank, size;
@@ -85,15 +89,12 @@ int main(int argc, char *argv[])
   }
   printf("Rank: %d range start: %ld, and end: %ld\n", rank, start, end);
 
-  // each chunk brute forces its own range now
-  //  start measuring the time
-  struct timespec start_timer, end_timer;
-  clock_gettime(CLOCK_MONOTONIC, &start_timer);
 
   // flag to check if msg is to be send to the other ranks
   int found = 0;
 
   // bruteforce the password now.
+
   for (int64_t counter = start; counter < end; counter++)
   {
     // variable n used to convert the counter to the password according to the CHARSET
@@ -104,8 +105,9 @@ int main(int argc, char *argv[])
       // using the base to CHARSET_SIZE (which is 62)
       // convert n to the password char by char
       password[pos] = CHARSET[n % CHARSET_SIZE];
-      n /= CHARSET_SIZE;
+       n /= CHARSET_SIZE;
     }
+   
     password[password_length] = '\0'; // add the null terminator
 
     // test password
@@ -123,14 +125,12 @@ int main(int argc, char *argv[])
         // set found to 1
         found = 1;
 
-        // send msg to the other ranks that password has been found
-        for (int i = 0; i < size; i++)
-        {
-          if (i != rank)
-          {
-            MPI_Send(&found, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-          }
+        MPI_Request reqs[64];
+        int rc = 0;
+        for (int i = 0; i < size; i++) {
+          if (i != rank) MPI_Isend(&found, 1, MPI_INT, i, 0, MPI_COMM_WORLD, &reqs[rc++]);
         }
+        MPI_Waitall(rc, reqs, MPI_STATUSES_IGNORE);
         break;
       }
     }
@@ -149,13 +149,15 @@ int main(int argc, char *argv[])
   {
     printf("Rank %d: Password not found with given length %d or in this rank.\n", rank, password_length);
   }
-  clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
-  double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
-  printf("Rank: %d Time: %.3f seconds\n", rank, elapsed);
-  free(ciphertext); // free mem
+    free(ciphertext); // free mem
   free(plaintext);  // free mem
   free(password);   // free mem
 
   MPI_Finalize();
+
+  clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
+  double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
+  printf("Rank: %d Time: %.3f seconds\n", rank, elapsed);
+
   return 0;
 }

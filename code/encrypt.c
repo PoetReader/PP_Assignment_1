@@ -28,14 +28,18 @@ int main(int argc, char *argv[]) {
   }
   int32_t cyphertext_length=encrypt(buffer1, length, key, buffer2);
   char encname[100];
+  encname[0] = '\0';  
   // Store encrypted data
   strcat(encname,argv[1]);
   strcat(encname,".enc");
-  file_save(encname, buffer2,cyphertext_length);
+  //file_save(encname, buffer2,cyphertext_length);
+  int32_t check = file_save(encname, buffer2,cyphertext_length);
+  if(check == -1 ) printf("saving .enc file has failed\n");
   // Compute and store sha512
   uint8_t checksum[SHA512_DIGEST_LENGTH];
   sha512sum(buffer1, length,checksum);
   encname[0]='\0';
+  encname[0] = '\0'; 
   strcat(encname,argv[1]);
   strcat(encname,".sha512");
   file_save(encname, checksum,SHA512_DIGEST_LENGTH);
