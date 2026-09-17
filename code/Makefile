@@ -15,6 +15,8 @@ mainMPI: mainMPI.c aes256.c utils.c charset.c
 optMPI: optMPI.c aes256.c utils.c charset.c
 	mpicc $^ -o $@ -lcrypto
 
+weakMPI: weakMPI.c aes256.c utils.c charset.c
+	mpicc $^ -o $@ -lcrypto
 
 clean:
 	@rm main encrypt brute mainMPI optMPI

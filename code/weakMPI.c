@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
   MPI_Init(&argc, &argv);
 
   int rank; // Id for the processes
-  int size; // Total number of processes  MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Why MPICOMM WORLD
+  int size; // Total number of processes
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -43,26 +43,19 @@ int main(int argc, char *argv[])
   {
     if (rank == 0)
     {
-      printf("Invalid password length %d\n", password_length);
+      printf("Invalid password length %d\n", (int)password_length);
     }
     err = 1;
   }
 
-  // Info msg printed by rank 0
-  if (rank == 0)
-  {
-    printf("Looking for password with length = %d with %d processes\n", password_length, size);
-  }
-
-  // Allocate buffers; each rank allocates their own buffers to read encrypted file and checksum for independence.
-  // No communication needed
-  uint8_t key[AES_256_KEY_LENGTH];                  // Stores the generate AES key
+  // Allocate buffers
+  uint8_t key[AES_256_KEY_LENGTH];                  // Stores the generated AES key
   uint8_t *ciphertext = malloc(MAX_FILE_SIZE_B);    // Stores encrypted data
   uint8_t *plaintext = malloc(MAX_FILE_SIZE_B);     // Stores decrypted data
   uint8_t plaintext_checksum[SHA512_DIGEST_LENGTH]; // Stores the original file sha512 sum
   uint8_t computed_checksum[SHA512_DIGEST_LENGTH];  // Stores the decrypted file sha512 sum
 
-  // load encrypted file only on rank 0
+  // Load encrypted file only on rank 0
   uint32_t ciphertext_length = 0;
   uint32_t sha_length = 0;
 
@@ -92,65 +85,40 @@ int main(int argc, char *argv[])
     return 0;
   }
 
-  // Broadcast the ciphertext, length and plaintext to the other ranks
+  // Broadcast ciphertext, length and checksum to all ranks
   MPI_Bcast(&ciphertext_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
   MPI_Bcast(&sha_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
   MPI_Bcast(ciphertext, ciphertext_length, MPI_UINT8_T, 0, MPI_COMM_WORLD);
   MPI_Bcast(plaintext_checksum, SHA512_DIGEST_LENGTH, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
-  // Compute range size per process
-  // total = CHARSET_SIZE ^ password_length
-  int64_t total = 1; // int64_t larger length exceed range
-  for (int i = 0; i < password_length; i++)
-  {
-    total *= CHARSET_SIZE;
-  }
+  // Weak scaling
+  // Workload per rank fixed to 5,000,000
+  // As process count grows, total space scales proportionally
+  
+  int64_t range_per_rank = 5000000;
+  int64_t start = rank * range_per_rank;
+  int64_t end = start + range_per_rank;
 
-  // Data partitioning: Range is split into chunks. The last chunk absorbs remainder
-  int64_t chunk = total / size;
-  int64_t start = chunk * rank; // First password index for according rank
-  int64_t end;
-  if (rank == size - 1)
+  if (rank == 0)
   {
-    end = total; // Last rank takes the remainder
-  }
-  else
-  {
-    end = start + chunk;
+    printf("Weak scaling: Length = %ld, Work per rank = %ld, Total space = %ld with %d ranks\n",
+           password_length, range_per_rank, range_per_rank * size, size);
   }
 
   // Potential password buffer with one extra byte for pbkdf2 and decrypt functions
   char *password = malloc(password_length + 1);
   uint8_t *password_index = malloc(password_length);
 
-  // State for found password: 1 if this rank has found the password (found is set if a match has been found)
-  // Fellow ranks are informed over MPI_ISend
   int found = 0;
-
-  // Helper variables to call MPI_IProbe periodically and not in every loop iteration
-  // optimization for small number of possible passwords
   int64_t reset_countdown = 100;
-  if (total < 100)
-  {
-    reset_countdown = 1;
-  }
-
   int64_t countdown = reset_countdown;
-
-  int64_t n = start; // Variable n used to find the starting password as an integer array of a ranks range
-  // Setup once per rank
-  for (int pos = password_length - 1; pos >= 0; pos--)
-  {
-    password_index[pos] = n % CHARSET_SIZE;
-    n /= CHARSET_SIZE;
-  }
 
   // Start timer
   MPI_Barrier(MPI_COMM_WORLD);
   struct timespec start_timer, end_timer;
   clock_gettime(CLOCK_MONOTONIC, &start_timer);
 
-  // Initial setup for password
+  // Initial setup for starting password based on `start` index
   int64_t k = start;
   for (int pos = password_length - 1; pos >= 0; pos--)
   {
@@ -163,34 +131,31 @@ int main(int argc, char *argv[])
   // ---- Bruteforce loop ----
   for (int64_t counter = start; counter < end; counter++)
   {
-    // each chunk brute forces its own range now
-
-    // test password
+    // Test password
     pbkdf2(password, password_length, key);
 
-    // key generation of current password
-    int32_t plaintext_length = decrypt(ciphertext, ciphertext_length, key, plaintext); // decryption with generated key
+    // Key generation of current password
+    int32_t plaintext_length = decrypt(ciphertext, ciphertext_length, key, plaintext);
 
-    if (plaintext_length >= 0) // check if decription has worked
+    if (plaintext_length >= 0) // Check if decryption worked
     {
-      sha512sum(plaintext, plaintext_length, computed_checksum); // Compute decrypted data sha512 sum
+      sha512sum(plaintext, plaintext_length, computed_checksum);
       if (!sha512cmp(plaintext_checksum, computed_checksum))
-      {                                     // If sha512 match with the original file we succeeded
-        plaintext[plaintext_length] = '\0'; // Make plaintext data "printable"
+      {
+        plaintext[plaintext_length] = '\0';
 
-        printf("Encrypted file contains: %s\n", plaintext);                   // Print decrypted data
-        printf("Rank %d: The password to the file is: %s\n", rank, password); // Print the password
+        printf("Encrypted file contains: %s\n", plaintext);
+        printf("Rank %d: The password to the file is: %s\n", rank, password);
 
         found = 1;
 
-        // Send a point-to-point notification to all other ranks
+        // Notify other ranks
         for (int i = 0; i < size; i++)
         {
           if (i != rank)
           {
             int dummy_msg = 1;
             MPI_Request req;
-            // Send using tag 0 to match MPI_Iprobe
             MPI_Isend(&dummy_msg, 1, MPI_INT, i, 0, MPI_COMM_WORLD, &req);
             MPI_Request_free(&req);
           }
@@ -200,8 +165,6 @@ int main(int argc, char *argv[])
     }
 
     // Periodic check if password has been found by another rank
-    // opt: to improve the usage of resources MPI_Iprobe called periodically
-
     countdown--;
     if (countdown == 0)
     {
@@ -210,29 +173,23 @@ int main(int argc, char *argv[])
       MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
       if (flag)
       {
-        // receive the msg and remove it
         int msg = 0;
         MPI_Recv(&msg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      }
-      if (flag)
-      {
         break;
       }
     }
 
-    // decrement to the next password like an odometer
+    // Odometer increment to next password
     for (int pos = password_length - 1; pos >= 0; pos--)
     {
       password_index[pos]++;
 
       if (password_index[pos] < CHARSET_SIZE)
       {
-        // Update ONLY the character that changed
         password[pos] = CHARSET[password_index[pos]];
         break;
       }
 
-      // Rollover (e.g., '9' -> '0')
       password_index[pos] = 0;
       password[pos] = CHARSET[0];
     }
@@ -242,15 +199,15 @@ int main(int argc, char *argv[])
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Stop timer
-  clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
+  clock_gettime(CLOCK_MONOTONIC, &end_timer);
   double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
 
   if (rank == 0)
   {
-    printf("Time: %.9f seconds\n", elapsed);
+    printf("Weak Scaling Time: %.9f seconds\n", elapsed);
   }
 
-  // Clean
+  // Clean up resources
   free(ciphertext);
   free(plaintext);
   free(password);

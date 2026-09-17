@@ -116,6 +116,7 @@ int main(int argc, char *argv[])
   int countdown = reset_countdown;
 
   // Start timer
+  MPI_Barrier(MPI_COMM_WORLD);
   struct timespec start_timer, end_timer;
   clock_gettime(CLOCK_MONOTONIC, &start_timer);
 
@@ -177,17 +178,24 @@ int main(int argc, char *argv[])
     }
   }
   // Print failure if this rank has not found the password
+  /*
   if (!found)
   {
     printf("Rank %d: Password not found with given length %d or in this rank.\n", rank, password_length);
-  }
+  }*/
   // Synchronize
-  //MPI_Barrier(MPI_COMM_WORLD);
+  MPI_Barrier(MPI_COMM_WORLD);
 
   // Stop timer
   clock_gettime(CLOCK_MONOTONIC, &end_timer); // finish measuring the time
   double elapsed = (end_timer.tv_sec - start_timer.tv_sec) + (end_timer.tv_nsec - start_timer.tv_nsec) / 1e9;
-  printf("Rank: %d Time: %.3f seconds\n", rank, elapsed);
+
+  // Only one rank prints measured time
+  if (rank == 0)
+  {
+  printf("Time: %.9f seconds\n", elapsed);
+  }
+  
 
   // Clean
   free(ciphertext); // free mem
