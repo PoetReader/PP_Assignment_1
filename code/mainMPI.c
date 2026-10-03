@@ -37,6 +37,7 @@ int main(int argc, char *argv[])
   const char *enc_path = argv[2];          // Path to encrypted file
   const char *sha_path = argv[3];          // Path to expected sha512 checksum
 
+    int err = 0;
   // Validation of password length to avoid undefined behavior
   if (password_length <= 0 || password_length > 10)
   {
@@ -44,8 +45,7 @@ int main(int argc, char *argv[])
     {
       printf("Invalid password length %d\n", password_length);
     }
-    MPI_Finalize();
-    return 0;
+    err = 1;
   }
 
   // Info msg printed by rank 0
@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
   uint8_t computed_checksum[SHA512_DIGEST_LENGTH];  // Stores the decrypted file sha512 sum
 
   // load encrypted file
-  uint32_t ciphertext_length = file_load(enc_path, ciphertext);
+  /*uint32_t ciphertext_length = file_load(enc_path, ciphertext);
   if (ciphertext_length <= 0)
   {
     printf("Failed to load .enc file\n");
@@ -82,6 +82,43 @@ int main(int argc, char *argv[])
     MPI_Finalize();
     return 0;
   }
+    */
+
+  // load encrypted file only on rank 0
+  uint32_t ciphertext_length = 0;
+  uint32_t sha_length = 0;
+
+  if (rank == 0)
+  {
+    ciphertext_length = file_load(enc_path, ciphertext);
+    if (ciphertext_length <= 0)
+    {
+      printf("Failed to load .enc file\n");
+      err = 1;
+    }
+    sha_length = file_load(sha_path, plaintext_checksum);
+    if (sha_length != SHA512_DIGEST_LENGTH)
+    {
+      printf("Failed to load .sha file\n");
+      err = 1;
+    }
+  }
+
+  // Broadcast the err to the other ranks
+  MPI_Bcast(&err, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (err)
+  {
+    free(ciphertext);
+    free(plaintext);
+    MPI_Finalize();
+    return 0;
+  }
+
+  // Broadcast the ciphertext, length and plaintext to the other ranks
+  MPI_Bcast(&ciphertext_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&sha_length, 1, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+  MPI_Bcast(ciphertext, ciphertext_length, MPI_UINT8_T, 0, MPI_COMM_WORLD);
+  MPI_Bcast(plaintext_checksum, SHA512_DIGEST_LENGTH, MPI_UINT8_T, 0, MPI_COMM_WORLD);
 
   // Compute range size per process
   // total = CHARSET_SIZE ^ password_length
@@ -193,9 +230,8 @@ int main(int argc, char *argv[])
   // Only one rank prints measured time
   if (rank == 0)
   {
-  printf("Time: %.9f seconds\n", elapsed);
+    printf("Time: %.9f seconds\n", elapsed);
   }
-  
 
   // Clean
   free(ciphertext); // free mem
